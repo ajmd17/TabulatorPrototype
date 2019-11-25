@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html>
+  <head>
+
+  </head>
+  <body>
+    <div id="tabulator-view">
+      <canvas id="tabulator-canvas" width="2000" height="900"></canvas>
+    </div>
+
+    <script>
+      const NoteTypes = {
+        _notes: [],
+        _notesByKey: {},
+
+        addNoteType(name, length) {
+          this._notes.push({ name, length });
+          this._notesByKey[name] = length;
+        },
+
+        isDotted(noteName) {
+          return noteName.endsWith('-dotted');
+        },
+
+        getNoteLength(noteName, dotted = false) {
+          if (this.isDotted(noteName)) {
+            return this._notesByKey[noteName];
+          }
+
+          if (dotted) {
+            return this._notesByKey[noteName + '-dotted'];
+          }
+
+          return this._notesByKey[noteName];
+        }
+      };
+
+      (function (noteTypes) {
+        [
+          { name: 'sixty-fourth', length: 1 / 64 },
+          { name: 'thirty-second', length: 1 / 32 },
+          { name: 'sixteenth', length: 1 / 16 },
+          { name: 'eighth', length: 1 / 8 },
+          { name: 'quarter', length: 1 / 4 },
+          { name: 'half', length: 1 / 2 },
+          { name: 'whole', length: 1 },
+        ].forEach(({ name, length }, index) => {
+          noteTypes.addNoteType(name, length);
+          noteTypes.addNoteType(name + '-dotted', length + (length / 2));
+        });
+      })(NoteTypes);
+
+      let testData = {
+        baseTempo: 120,
+        baseTimeSignature: '4/4',
+        tracks: [
+          {
+            instrument: 'guitar_distorted',
+            bars: [
+              {
+                beginRepeat: 1,
+                notes: [
+                  { type: 'quarter', isRest: false, keyboard: null, guitar: { fret: 6, string: 2 } },
+                  { type: 'quarter', isRest: true },
+                  { type: 'eighth', isRest: false, keyboard: null, guitar: { fret: 3, string: 3 } },
+                  { type: 'eighth', isRest: false, keyboard: null, guitar: { fret: 5, string: 3 } },
+                  { type: 'quarter', isRest: false, keyboard: null, guitar: { fret: 4, string: 4 } },
+                ]
+              },
+              {
+                notes: [
+                  { type: 'quarter', isRest: false, keyboard: null, guitar: { fret: 6, string: 2 } },
+                  { type: 'quarter', isRest: true },
+                  { type: 'eighth', isRest: false, keyboard: null, guitar: { fret: 3, string: 3 } },
+                  { type: 'eighth', isRest: false, keyboard: null, guitar: { fret: 5, string: 3 } },
+                  { type: 'quarter', isRest: false, keyboard: null, guitar: { fret: 4, string: 4 } },
+                ]
+              },
+              {
+                endRepeat: 1,
+                notes: [
+                  { type: 'quarter', isRest: false, keyboard: null, guitar: { fret: 6, string: 2 } },
+                  { type: 'quarter', isRest: true },
+                  { type: 'eighth', isRest: false, keyboard: null, guitar: { fret: 3, string: 3 } },
+                  { type: 'eighth', isRest: false, keyboard: null, guitar: { fret: 5, string: 3 } },
+                  { type: 'quarter', isRest: false, keyboard: null, guitar: { fret: 4, string: 4 } },
+                ]
+              },
+              { notes: [] },
+              { notes: [] },
+              { notes: [] },
+              { notes: [] },
+              { notes: [] },
+              { notes: [] },
+              { notes: [] },
+            ]
+          },
+        ]
+      };
+
+      const BarType = {
+        TAB: 'tab',
+        SHEET: 'sheet'
+      };
+
+      class Repeat {
+        constructor(times = 1) {
+          this._times = times;
+        }
+
+        get times() {
+          return this._times;
+        }
+
+        set times(value) {
+          this._times = value;
+        }
+      }
+
+      Repeat.times = (numRepeats) => numRepeats ? new Repeat(numRepeats) : Repeat.NONE;
+      Repeat.NONE = new Repeat(null);
+
+      class Renderable {
+        constructor(clickable = true, selectable = false) {
+          this._clickable = clickable;
+          this._selectable = selectable;
+          this._renderData = new RenderData();
+          this._subRenderables = [];
+        }
+
+        setRenderData(x, y, width, height) {
+          this._renderData.x = x;
+          this._renderData.y = y;
+          this._renderData.width = width;
+          this._renderData.height = height;
+        }
+
+        addSubNode(obj) {
+          if (!(obj instanceof Renderable)) {
+            throw Error(`${String(obj)} is not an instance of Renderable`);
+          }
+
+          this._subRenderables.push(obj);
+        }
+
+        clickIntersection(x, y) {
+          if (!this.clickable) {
+            return null;
+          }
+
+          for (let i = 0; i < this._subRenderables.length; i++) {
+            let result = this._subRenderables[i].clickIntersection(x, y);
+
+            if (result !== null) {
+              return result;
+            }
+          }
+
+
+          if (this.selectable
+            && (x >= this.renderData.x && x <= this.renderData.x + this.renderData.width
+            && y >= this.renderData.y && y <= this.renderData.y + this.renderData.height)) {
+
+            console.log('click', this.renderData.x, this.renderData.y);
+            return this;
+          }
+
+          return null;
+        }
+
+        render() {
+          this._subRenderables = [];
+        }
+
+        get renderData() {
+          return this._renderData;
+        }
+
+        get clickable() {
+          return this._clickable;
+        }
+
+        get selectable() {
+          return this._selectable;
+        }
+      }
+
+      class Note extends Renderable {
+        constructor(note) {
+          super(true, true);
+
+          this._note = note;
+        }
+
+        render(context, x, y) {
+          super.render();
+        }
+
+        get note() {
+          return this._note;
+        }
+
+        get dotted() {
+          return NoteTypes.isDotted(this.note);
+        }
+
+        get duration() {
+          return NoteTypes.getNoteLength(this.note);
+        }
+      }
+
+      class TabNote extends Note {
+        constructor(note, { fret = 0, string = 0 }) {
+          super(note);
+
+          this._fret = fret;
+          this._stringNo = string;
+        }
+
+        render(context, bar, x, y) {
+          super.render(context, x, y);
+
+          const stringOffset = (6 - this.stringNo - 1) * (bar.renderData.height / 6),
+            quaterNoteWidth = bar.renderData.width / 4,
+            noteWidth = quaterNoteWidth * (this.duration * 4),
+            noteLeftPadding = (quaterNoteWidth / 2),
+            noteYOffset = 5,
+            text = String(this.fret);
+
+          let overflow =  Math.max(0, (x - bar.renderData.x + noteLeftPadding + noteWidth) - bar.renderData.width);
+
+          super.setRenderData(
+            x + noteLeftPadding,
+            y + stringOffset - ((bar.renderData.height / 6) / 2),
+            noteWidth - overflow,
+            bar.renderData.height / 6
+          );
+
+          context.font = '14px Sans-Serif';
+          context.fillStyle = '#222';
+          context.fillText(
+            text,
+            this.renderData.x,
+            y + stringOffset + noteYOffset
+          );
+
+          return noteWidth;
+        }
+
+        get fret() {
+          return this._fret;
+        }
+
+        get stringNo() {
+          return this._stringNo;
+        }
+      }
+
+      class RenderData {
+        constructor(x, y, width, height) {
+          this._x = Number(x);
+          this._y = Number(y);
+          this._width = Number(width);
+          this._height = Number(height);
+        }
+
+        get x() {
+          return this._x;
+        }
+
+        set x(value) {
+          this._x = Number(value);
+        }
+
+        get y() {
+          return this._y;
+        }
+
+        set y(value) {
+          this._y = Number(value);
+        }
+
+        get width() {
+          return this._width;
+        }
+
+        set width(value) {
+          this._width = Number(value);
+        }
+
+        get height() {
+          return this._height;
+        }
+
+        set height(value) {
+          this._height = Number(value);
+        }
+      }
+
+      class Bar extends Renderable {
+        constructor({
+          notes,
+          beginRepeat = Repeat.NONE,
+          endRepeat = Repeat.NONE,
+          width = Bar.BAR_WIDTH,
+          height = Bar.BAR_HEIGHT,
+          barType = BarType.TAB
+        }) {
+          super(true, false);
+
+          this._notes = notes;
+          this.repeatBegin = beginRepeat;
+          this.repeatEnd = endRepeat;
+          this._width = width;
+          this._height = height;
+          this._barType = barType;
+
+          this._renderData = new RenderData();
+        }
+
+        render(context, x, y, lastBar = false) {
+          super.render();
+
+          if (this.barType == BarType.TAB) {
+            this._renderAsTab(context, x, y, lastBar);
+          } else {
+            throw Error(`render(): BarType '${this.barType}' not implemented`);
+          }
+        }
+
+        _renderAsTab(context, x, y, lastBar) {
+          let xOffset = x,
+            yOffset = y,
+            lineHeight = this.height - (this.height / 6);
+
+          super.setRenderData(x, y, this.width, this.height);
+
+          context.beginPath();
+          context.lineWidth = 1;
+
+          for (let i = 0; i < 6; i++) {
+            context.moveTo(xOffset, yOffset);
+            context.lineTo(xOffset + this.width, yOffset);
+
+            yOffset += (this.height / 6);
+          }
+
+          context.stroke();
+
+          for (let i = 0; i < this.notes.length; i++) {
+            xOffset += this._renderTabNote(context, this.notes[i], xOffset, y);
+          }
+
+          if (this.repeatBegin != Repeat.NONE) {
+            context.beginPath();
+            context.lineWidth = 4;
+
+            context.moveTo(x, y);
+            context.lineTo(x, y + lineHeight);
+
+            context.stroke();
+
+            context.beginPath();
+            context.lineWidth = 1;
+
+            context.moveTo(x + 5, y);
+            context.lineTo(x + 5, y + lineHeight);
+
+            context.stroke();
+
+            context.beginPath();
+            context.arc(x + 15, y + (lineHeight / 2) + 8, 3, 0, Math.PI * 2);
+            context.fillStyle = '#000';
+            context.fill();
+
+            context.beginPath();
+            context.arc(x + 15, y + (lineHeight / 2) - 8, 3, 0, Math.PI * 2);
+            context.fillStyle = '#000';
+            context.fill();
+          } else {
+            context.beginPath();
+            context.lineWidth = 1;
+
+            context.moveTo(x, y);
+            context.lineTo(x, y + lineHeight);
+
+            context.stroke();
+          }
+
+          if (this.repeatEnd != Repeat.NONE || lastBar) {
+            context.beginPath();
+            context.lineWidth = 4;
+
+            context.moveTo(x + this.width, y);
+            context.lineTo(x + this.width, y + lineHeight);
+
+            context.stroke();
+
+            context.beginPath();
+            context.lineWidth = 1;
+
+            context.moveTo(x + this.width - 5, y);
+            context.lineTo(x + this.width - 5, y + lineHeight);
+
+            context.stroke();
+          }
+
+          if (this.repeatEnd != Repeat.NONE) {
+            context.beginPath();
+            context.arc(x + this.width - 15, y + (lineHeight / 2) + 8, 3, 0, Math.PI * 2);
+            context.fillStyle = '#000';
+            context.fill();
+
+            context.beginPath();
+            context.arc(x + this.width - 15, y + (lineHeight / 2) - 8, 3, 0, Math.PI * 2);
+            context.fillStyle = '#000';
+            context.fill();
+          }
+        }
+
+        _renderTabNote(context, note, xOffset, yOffset) {
+          let tabNote = new TabNote(note.type, note.guitar || {});
+          this.addSubNode(tabNote);
+
+          return tabNote.render(context, this, xOffset, yOffset);
+        }
+
+        get notes() {
+          return this._notes;
+        }
+
+        get repeatBegin() {
+          if (this._beginRepeat == null || !(this._beginRepeat instanceof Repeat)) {
+            return Repeat.NONE;
+          }
+
+          return this._beginRepeat;
+        }
+
+        set repeatBegin(value) {
+          if (value === null || value instanceof Repeat) {
+            this._beginRepeat = value;
+            return;
+          }
+
+          this._beginRepeat = Repeat.times(value);
+        }
+
+        get repeatEnd() {
+          if (this._endRepeat == null || !(this._endRepeat instanceof Repeat)) {
+            return Repeat.NONE;
+          }
+
+          return this._endRepeat;
+        }
+
+        set repeatEnd(value) {
+          if (value === null || value instanceof Repeat) {
+            this._endRepeat = value;
+            return;
+          }
+
+          this._endRepeat = Repeat.times(value);
+        }
+
+        get width() {
+          return this._width;
+        }
+
+        get height() {
+          return this._height;
+        }
+
+        get barType() {
+          return this._barType;
+        }
+      }
+
+      Bar.BAR_WIDTH = 350;
+      Bar.BAR_HEIGHT = 100;
+
+      class MainScene extends Renderable {
+        constructor(canvas, context) {
+          super();
+
+          this.canvas = canvas;
+          this.context = context;
+        }
+
+        render(tracks, barsBeforeBreak = 4) {
+          super.render();
+
+          const xOffsetStart = 5,
+            maxBars = Math.max.apply(null, tracks.map(track => track.bars.length));
+
+          let xOffset = xOffsetStart, yOffset = 0;
+
+          for (let barIndex = 0; barIndex < maxBars; barIndex += barsBeforeBreak) {
+            tracks.forEach((track) => {
+              let yOffsetToAdd = 0;
+
+              for (let trackBarOffset = 0; trackBarOffset < barsBeforeBreak; trackBarOffset++) {
+                if (barIndex + trackBarOffset < track.bars.length) {
+                  let [barWidth, barHeight] = this._renderBar({
+                    track,
+                    barIndex,
+                    trackBarOffset,
+                    xOffset,
+                    yOffset,
+                    lastBar: (barIndex + trackBarOffset + 1) >= Math.min(track.bars.length, barIndex + barsBeforeBreak)
+                  });
+
+                  xOffset += barWidth;
+                  yOffsetToAdd = Math.max(yOffsetToAdd, barHeight);
+                }
+              }
+
+              xOffset = xOffsetStart;
+              yOffset += yOffsetToAdd;
+            });
+          }
+        }
+
+        _renderBar({ track, barIndex, trackBarOffset, xOffset, yOffset, lastBar = false }) {
+          let barObj = new Bar(track.bars[barIndex + trackBarOffset]);
+          this.addSubNode(barObj);
+
+          barObj.render(this.context, xOffset, yOffset, lastBar);
+
+          return [barObj.width, barObj.height];
+        }
+      }
+
+      class SelectionNode extends Renderable {
+        constructor() {
+          super(false);
+
+          this._selectionNode = null;
+        }
+
+        render(context) {
+          super.render();
+
+          if (this.selectionNode === null) {
+            return;
+          }
+
+          context.globalAlpha = 0.3;
+          context.fillStyle = '#78B5FF';
+          context.fillRect(
+            this.selectionNode.renderData.x,
+            this.selectionNode.renderData.y,
+            this.selectionNode.renderData.width,
+            this.selectionNode.renderData.height
+          );
+          console.log('render',
+            this.selectionNode.renderData.x,
+            this.selectionNode.renderData.y)
+          context.globalAlpha = 1.0;
+        }
+
+        get selectionNode() {
+          return this._selectionNode;
+        }
+
+        set selectionNode(value) {
+          this._selectionNode = value;
+        }
+      }
+
+      const Tabulator = {
+        _currentData: null,
+        _canvas: null,
+        _context: null,
+
+        _selection: new SelectionNode(),
+
+        _mainScene: null,
+
+        init(canvasId) {
+          this._canvas = document.getElementById(canvasId);
+
+          if (this._canvas == null || !(this._canvas instanceof HTMLCanvasElement)) {
+            throw Error(`Expected element with id ${canvasId} to be a HTMLCanvasElement`);
+          }
+
+          if (!(this._context = this._canvas.getContext('2d'))) {
+            throw Error('Could not get context 2d from canvas');
+          }
+
+          this._mainScene = new MainScene(this._canvas, this._context);
+
+          this._canvas.addEventListener('click', (event) => {
+            let rect = this._canvas.getBoundingClientRect();
+
+            this._selection.selectionNode = this._mainScene.clickIntersection(
+              event.clientX - rect.left,
+              event.clientY - rect.top
+            );
+
+            this.render();
+          });
+        },
+
+        loadData(data) {
+          this._currentData = data;
+        },
+
+        render() {
+          if (!this._canvas || !this._context || !this._mainScene) {
+            throw Error('Tabulator not initialized; cannot render');
+          }
+
+          if (!this._currentData) {
+            throw Error('No data loaded; Tabulator cannot render');
+          }
+
+          this._context.clearRect(0, 0, this._canvas.width, this._canvas.height);
+
+          this.mainScene.render(this._currentData.tracks, 4);
+          this._selection.render(this._context);
+        },
+
+        get mainScene() {
+          return this._mainScene;
+        }
+      };
+
+      Tabulator.init('tabulator-canvas');
+      Tabulator.loadData(testData);
+      Tabulator.render();
+
+    </script>
+  </body>
+</html>
